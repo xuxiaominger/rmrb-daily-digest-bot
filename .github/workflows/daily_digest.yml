@@ -1,0 +1,41 @@
+name: Daily RMRB Digest
+
+on:
+  schedule:
+    - cron: "10 23 * * *"
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: "Optional date in YYYY-MM-DD"
+        required: false
+        type: string
+
+jobs:
+  run-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run digest
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RMRB_SEND_TIMEZONE: Asia/Shanghai
+        run: |
+          if [ -n "${{ github.event.inputs.target_date }}" ]; then
+            python3 main.py --date "${{ github.event.inputs.target_date }}"
+          else
+            python3 main.py
+          fi
