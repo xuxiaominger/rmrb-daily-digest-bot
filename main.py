@@ -22,10 +22,12 @@ LAYOUT_URL_TEMPLATE = BASE_URL + "/rmrb/pc/layout/{yyyymm}/{dd}/node_01.html"
 SECTION_LINK_RE = re.compile(r"(?:^|/)?node_(\d+)\.html$")
 ARTICLE_LINK_RE = re.compile(r"(?:^|.*/)?content_\d+\.html$")
 SKIP_TITLE_PATTERNS = (
+    "责编",
     "本版责编",
     "版式设计",
     "本版邮箱",
 )
+TELEGRAM_TEXT_LIMIT = 1000
 
 
 @dataclass
@@ -113,7 +115,7 @@ class RMRBClient:
             title = self._clean_text(anchor.get_text(" ", strip=True))
             if not title:
                 continue
-            if any(title.startswith(pattern) for pattern in SKIP_TITLE_PATTERNS):
+            if any(pattern in title for pattern in SKIP_TITLE_PATTERNS):
                 continue
             content = self.fetch_article_content(article_url)
             articles.append(
@@ -307,6 +309,60 @@ def assemble_final_markdown(target_date: str, extras: str, section_markdown: str
     return "\n\n".join(part for part in parts if part.strip()).strip()
 
 
+def build_compact_title_digest(target_date: str, sections: list[Section], limit: int) -> str:
+    lines = [
+        f"# 人民日报每日摘要｜{target_date}",
+        "## 版面标题速览",
+    ]
+    omitted_sections = 0
+
+    for idx, section in enumerate(sections):
+        titles = [f"《{article.title}》" for article in section.articles]
+        if not titles:
+            candidate = f"- {section.section_name}：本版无文章"
+        else:
+            candidate = f"- {section.section_name}：" + "；".join(titles)
+
+        trial = "\n".join(lines + [candidate])
+        if len(trial) <= limit:
+            lines.append(candidate)
+            continue
+
+        compact_header = f"- {section.section_name}："
+        if len("\n".join(lines + [compact_header])) <= limit:
+            lines.append(compact_header)
+            added_any = False
+            for article in section.articles:
+                item = f"  《{article.title}》"
+                if len("\n".join(lines + [item])) <= limit:
+                    lines.append(item)
+                    added_any = True
+                else:
+                    break
+            if added_any:
+                omitted_sections = len(sections) - idx - 1
+                break
+
+        omitted_sections = len(sections) - idx
+        break
+
+    if omitted_sections > 0:
+        suffix = f"- 因 1000 字限制，后续还有 {omitted_sections} 个版面未展开。"
+        if len("\n".join(lines + [suffix])) <= limit:
+            lines.append(suffix)
+
+    text = "\n".join(lines).strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip()
+
+
+def enforce_summary_limit(summary: str, target_date: str, sections: list[Section], limit: int) -> str:
+    if len(summary) <= limit:
+        return summary
+    return build_compact_title_digest(target_date=target_date, sections=sections, limit=limit)
+
+
 def load_dotenv(dotenv_path: Path) -> None:
     if not dotenv_path.exists():
         return
@@ -447,6 +503,12 @@ def main() -> int:
 
     ai_client = OpenAICompatClient(api_key=api_key, base_url=base_url, model=model, timeout=max(timeout, 60))
     summary = ai_client.summarize(target_date=target_date, sections=sections, max_article_chars=max_article_chars)
+    summary = enforce_summary_limit(
+        summary=summary,
+        target_date=target_date,
+        sections=sections,
+        limit=TELEGRAM_TEXT_LIMIT,
+    )
 
     raw_path, summary_path = save_outputs(output_dir, target_date, raw_payload, summary)
     print(f"已保存原始数据: {raw_path}")
