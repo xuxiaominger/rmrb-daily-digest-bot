@@ -19,7 +19,7 @@ from bs4 import BeautifulSoup
 
 BASE_URL = "https://paper.people.com.cn"
 LAYOUT_URL_TEMPLATE = BASE_URL + "/rmrb/pc/layout/{yyyymm}/{dd}/node_01.html"
-SECTION_LINK_RE = re.compile(r"/rmrb/pc/layout/\d{6}/\d{2}/node_(\d+)\.html")
+SECTION_LINK_RE = re.compile(r"(?:^|/)?node_(\d+)\.html$")
 ARTICLE_LINK_RE = re.compile(r"/rmrb/pc/content/\d{6}/\d{2}/content_\d+\.html")
 
 
@@ -264,6 +264,20 @@ FINAL_SYSTEM_PROMPT = """你是《人民日报》总编辑。请基于当天全�
 """
 
 
+def load_dotenv(dotenv_path: Path) -> None:
+    if not dotenv_path.exists():
+        return
+
+    for raw_line in dotenv_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
+
+
 def build_raw_payload(target_date: str, sections: list[Section]) -> dict:
     return {
         "date": target_date,
@@ -363,6 +377,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    load_dotenv(Path(".env"))
     args = parse_args()
     timezone_name = os.getenv("RMRB_SEND_TIMEZONE", "Asia/Shanghai")
     output_dir = Path(os.getenv("RMRB_OUTPUT_DIR", "output"))
