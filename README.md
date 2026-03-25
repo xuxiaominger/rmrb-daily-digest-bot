@@ -2,6 +2,8 @@
 
 每天早上自动抓取《人民日报》电子版全部版面，抽取全部文章内容，使用 AI 以“人民日报总编辑”口吻汇总为知识点摘要，并推送到 Telegram。
 
+默认已改为接入阿里云百炼的通义千问 OpenAI 兼容接口。
+
 ## 功能
 
 - 根据当天日期自动生成目录页地址
@@ -28,9 +30,9 @@
 参考 [`.env.example`](/Users/xuxiaoming/Documents/Playground/.env.example)：
 
 ```bash
-OPENAI_API_KEY=your_api_key
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-4.1-mini
+DASHSCOPE_API_KEY=your_dashscope_api_key
+DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+DASHSCOPE_MODEL=qwen-turbo
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 TELEGRAM_CHAT_ID=your_telegram_chat_id
 RMRB_SEND_TIMEZONE=Asia/Shanghai
@@ -45,7 +47,7 @@ RMRB_MAX_ARTICLE_CHARS=4000
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-export OPENAI_API_KEY=...
+export DASHSCOPE_API_KEY=...
 export TELEGRAM_BOT_TOKEN=...
 export TELEGRAM_CHAT_ID=...
 python3 main.py --dry-run
@@ -67,11 +69,18 @@ python3 main.py --date 2026-03-25 --dry-run
 
 需要在 GitHub 仓库中配置以下 Secrets：
 
-- `OPENAI_API_KEY`
-- `OPENAI_BASE_URL`
-- `OPENAI_MODEL`
+- `DASHSCOPE_API_KEY`
+- `DASHSCOPE_BASE_URL`
+- `DASHSCOPE_MODEL`
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
+
+兼容说明：
+
+- 当前代码优先读取 `DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL`、`DASHSCOPE_MODEL`
+- 同时兼容旧变量 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`
+- 默认百炼兼容地址为 `https://dashscope.aliyuncs.com/compatible-mode/v1`
+- 默认模型为 `qwen-turbo`，你也可以改成自己的可用千问模型
 
 ## Telegram 机器人准备
 

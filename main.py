@@ -347,6 +347,14 @@ def positive_int_from_env(name: str, default: int) -> int:
     return int(raw)
 
 
+def first_env(*names: str, default: str | None = None) -> str | None:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value
+    return default
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="人民日报每日抓取、AI 摘要与 Telegram 推送")
     parser.add_argument("--date", help="抓取日期，格式 YYYY-MM-DD，默认使用当前时区日期")
@@ -369,11 +377,15 @@ def main() -> int:
 
     raw_payload = build_raw_payload(target_date, sections)
 
-    api_key = os.getenv("OPENAI_API_KEY")
-    base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-    model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+    api_key = first_env("DASHSCOPE_API_KEY", "OPENAI_API_KEY")
+    base_url = first_env(
+        "DASHSCOPE_BASE_URL",
+        "OPENAI_BASE_URL",
+        default="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    )
+    model = first_env("DASHSCOPE_MODEL", "OPENAI_MODEL", default="qwen-turbo")
     if not api_key:
-        raise RuntimeError("缺少环境变量 OPENAI_API_KEY")
+        raise RuntimeError("缺少环境变量 DASHSCOPE_API_KEY 或 OPENAI_API_KEY")
 
     ai_client = OpenAICompatClient(api_key=api_key, base_url=base_url, model=model, timeout=max(timeout, 60))
     summary = ai_client.summarize(target_date=target_date, sections=sections, max_article_chars=max_article_chars)
