@@ -20,7 +20,12 @@ from bs4 import BeautifulSoup
 BASE_URL = "https://paper.people.com.cn"
 LAYOUT_URL_TEMPLATE = BASE_URL + "/rmrb/pc/layout/{yyyymm}/{dd}/node_01.html"
 SECTION_LINK_RE = re.compile(r"(?:^|/)?node_(\d+)\.html$")
-ARTICLE_LINK_RE = re.compile(r"/rmrb/pc/content/\d{6}/\d{2}/content_\d+\.html")
+ARTICLE_LINK_RE = re.compile(r"(?:^|.*/)?content_\d+\.html$")
+SKIP_TITLE_PATTERNS = (
+    "本版责编",
+    "版式设计",
+    "本版邮箱",
+)
 
 
 @dataclass
@@ -69,7 +74,7 @@ class RMRBClient:
         soup = BeautifulSoup(self.get_html(layout_url), "html.parser")
 
         section_map: dict[int, Section] = {}
-        for anchor in soup.select("a[href]"):
+        for anchor in soup.select("a#pageLink[href]"):
             href = anchor.get("href", "").strip()
             match = SECTION_LINK_RE.search(href)
             if not match:
@@ -107,6 +112,8 @@ class RMRBClient:
             seen_urls.add(article_url)
             title = self._clean_text(anchor.get_text(" ", strip=True))
             if not title:
+                continue
+            if any(title.startswith(pattern) for pattern in SKIP_TITLE_PATTERNS):
                 continue
             content = self.fetch_article_content(article_url)
             articles.append(
@@ -175,43 +182,40 @@ class OpenAICompatClient:
         )
 
     def summarize(self, target_date: str, sections: list[Section], max_article_chars: int) -> str:
-        section_summaries = []
+        article_index = []
+        section_blocks = []
+
         for section in sections:
-            payload = self._build_section_payload(section, max_article_chars)
-            section_summaries.append(
-                {
-                    "section_no": section.section_no,
-                    "section_name": section.section_name,
-                    "summary": self._chat(
-                        system_prompt=SECTION_SYSTEM_PROMPT,
-                        user_prompt=payload,
-                    ),
-                }
-            )
+            block_lines = [f"### {section.section_name}"]
+            if not section.articles:
+                block_lines.append("- 本版未抓取到文章。")
+            else:
+                for article in section.articles:
+                    digest = build_article_digest(article.content[:max_article_chars])
+                    block_lines.append(f"- 《{article.title}》：{digest}")
+                    article_index.append(
+                        {
+                            "section_name": section.section_name,
+                            "title": article.title,
+                            "digest": digest,
+                        }
+                    )
+            section_blocks.append("\n".join(block_lines))
 
         final_payload = {
             "date": target_date,
-            "section_summaries": section_summaries,
+            "article_index": article_index,
         }
-        return self._chat(
+        extras = self._chat(
             system_prompt=FINAL_SYSTEM_PROMPT,
             user_prompt=json.dumps(final_payload, ensure_ascii=False, indent=2),
         )
 
-    def _build_section_payload(self, section: Section, max_article_chars: int) -> str:
-        section_payload = {
-            "section_no": section.section_no,
-            "section_name": section.section_name,
-            "articles": [
-                {
-                    "title": article.title,
-                    "url": article.url,
-                    "content": article.content[:max_article_chars],
-                }
-                for article in section.articles
-            ],
-        }
-        return json.dumps(section_payload, ensure_ascii=False, indent=2)
+        return assemble_final_markdown(
+            target_date=target_date,
+            extras=extras,
+            section_markdown="\n\n".join(section_blocks).strip(),
+        )
 
     def _chat(self, system_prompt: str, user_prompt: str) -> str:
         response = self.session.post(
@@ -231,37 +235,76 @@ class OpenAICompatClient:
         return data["choices"][0]["message"]["content"].strip()
 
 
-SECTION_SYSTEM_PROMPT = """你是《人民日报》总编辑。你将阅读一个版面的全部文章内容，并产出该版面知识点摘要。
+FINAL_SYSTEM_PROMPT = """你是《人民日报》总编辑。请基于当天全部版面摘要，撰写一份《人民日报每日摘要》。
 
-要求：
-1. 口吻庄重、准确、凝练，符合人民日报总编辑身份。
-2. 只根据提供材料总结，不补充站外事实。
-3. 输出 3-6 条知识点，必要时补充一句“本版总体判断”。
-4. 广告或信息量明显偏低时，直接说明“本版信息量较低”。
-5. 输出使用 Markdown，适合后续拼接到 Telegram 消息。
-"""
-
-
-FINAL_SYSTEM_PROMPT = """你是《人民日报》总编辑。请基于当天全部版面摘要，撰写一份《人民日报今日知识点摘要》。
+硬性要求：
+1. 不要输出总标题，程序会自动补标题。
+2. 只能压缩和重组已提供内容，不得自行判断取舍，不得写空泛评价，不得编造。
+3. 你只负责输出“今日总览”“重点小故事”“今日关键词”，不要输出“版面摘要”，因为版面摘要会由程序按文章标题自动拼接。
+4. “重点小故事”必须从提供的文章条目里挑出3到8个最具人物感、现场感、基层感、故事感的条目，保留原标题。
+5. 输出适合 Telegram 阅读，使用 Markdown。
 
 输出结构必须为：
-# 人民日报每日摘要｜{date}
-
 ## 一、今日总览
-- 5 到 8 条全局要点
+- 6到10条，仅概括当天已经出现的主题、举措、事件、表述和动向。
 
-## 二、版面摘要
-按版面顺序列出，每个版面 2 到 5 条知识点
+## 三、重点小故事
+- 《标题》：2到3句摘录
 
-## 三、今日重点结论
-- 从政策信号、经济动向、社会民生、国际局势、文化思想等角度提炼关键判断
-
-要求：
-1. 用中文输出。
-2. 风格庄重、凝练、可读，适合 Telegram。
-3. 不要编造，不要脱离输入材料。
-4. 如果个别版面信息较少，可简写。
+## 四、今日关键词
+- 若干关键词
 """
+
+
+def split_sentences(text: str) -> list[str]:
+    normalized = re.sub(r"\s+", " ", text or "").strip()
+    if not normalized:
+        return []
+    parts = re.split(r"(?<=[。！？；])", normalized)
+    return [part.strip() for part in parts if part.strip()]
+
+
+def build_article_digest(content: str, max_chars: int = 180) -> str:
+    paragraphs = [line.strip() for line in content.splitlines() if line.strip()]
+    candidates: list[str] = []
+    for paragraph in paragraphs[:3]:
+        candidates.extend(split_sentences(paragraph)[:2])
+
+    if not candidates:
+        candidates = split_sentences(content)
+
+    result = ""
+    for sentence in candidates:
+        tentative = f"{result}{sentence}"
+        if len(tentative) > max_chars and result:
+            break
+        result = tentative
+        if len(result) >= max_chars:
+            break
+
+    return result[:max_chars].strip() or content[:max_chars].strip() or "原文内容较短。"
+
+
+def assemble_final_markdown(target_date: str, extras: str, section_markdown: str) -> str:
+    extras = extras.strip()
+    split_marker = "## 三、重点小故事"
+    if split_marker in extras:
+        before, after = extras.split(split_marker, 1)
+        parts = [
+            f"# 人民日报每日摘要｜{target_date}",
+            before.strip(),
+            "## 二、版面摘要",
+            section_markdown,
+            f"{split_marker}\n{after.strip()}",
+        ]
+    else:
+        parts = [
+            f"# 人民日报每日摘要｜{target_date}",
+            extras,
+            "## 二、版面摘要",
+            section_markdown,
+        ]
+    return "\n\n".join(part for part in parts if part.strip()).strip()
 
 
 def load_dotenv(dotenv_path: Path) -> None:
